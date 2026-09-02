@@ -35,10 +35,10 @@
     
     /* Container Area Kamera */
     #reader-container { display: none; margin-bottom: 15px; border: 2px dashed #007bff; padding: 10px; border-radius: 8px; background: #fff; text-align: center; position: relative; }
-    #interactive.viewport { width: 100%; height: 250px; overflow: hidden; position: relative; }
+    #interactive.viewport { width: 100%; height: 260px; overflow: hidden; position: relative; border-radius: 6px; }
     #interactive.viewport canvas, #interactive.viewport video { width: 100%; height: 100%; object-fit: cover; }
     
-    /* Garis Laser Merah */
+    /* Garis Laser Merah & Box Target */
     .scan-guide {
       position: absolute;
       top: 50%;
@@ -46,16 +46,20 @@
       right: 10%;
       height: 2px;
       background: red;
-      box-shadow: 0 0 8px red;
+      box-shadow: 0 0 10px red;
       z-index: 10;
       pointer-events: none;
+    }
+    .scan-box-info {
+      font-size: 12px;
+      color: #666;
+      margin-top: 8px;
     }
   </style>
 </head>
 <body>
 
-  <!-- Kamu bisa ubah Judul di bawah ini -->
-  <h2>SORTIR GMR YA GUYSSSSS</h2>
+  <h2>📚 Sistem Sortir & Pendataan Buku</h2>
 
   <div class="card">
     <button type="button" class="btn-sync" onclick="fetchData(true)">🔄 Sync Master Data Terbaru</button>
@@ -66,7 +70,7 @@
       <div id="interactive" class="viewport">
         <div class="scan-guide"></div>
       </div>
-      <p style="font-size: 12px; color: #666; margin-top: 8px;">Posisikan garis barcode melintasi <b>garis merah</b></p>
+      <p class="scan-box-info" id="scannerHint">Posisikan garis barcode melintasi <b>garis merah</b></p>
     </div>
 
     <form id="bookForm" class="form-group">
@@ -104,7 +108,7 @@
   </div>
 
   <script>
-    const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwvND8_BwNxiygXN14reHZbHGk6oHctBVQsgeu5DkpH7-0jxyqLOY0G79NVhVcl_qh2_w/exec";
+    const SCRIPT_URL = "GANTI_DENGAN_URL_WEB_APP_KAMU";
 
     let masterMap = new Map();
     let listBukuSimpan = [];
@@ -147,7 +151,7 @@
         .catch(err => console.error("Error load data:", err));
     }
 
-    // --- FITUR KAMERA KHUSUS DUKUNGAN iOS & ANDROID ---
+    // --- FITUR KAMERA SUPER SMOOTH & KHUSUS MATCH DATABASE ---
     function toggleScanner() {
       const container = document.getElementById("reader-container");
       const btnText = document.getElementById("btnScanText");
@@ -161,22 +165,36 @@
         container.style.display = "block";
         btnText.textContent = "Tutup Kamera";
         isScanning = true;
-        startQuaggaIOS();
+        startQuaggaSmooth();
       }
     }
 
-    function startQuaggaIOS() {
+    function startQuaggaSmooth() {
       Quagga.init({
         inputStream: {
           name: "Live",
           type: "LiveStream",
           target: document.querySelector("#interactive"),
           constraints: {
-            facingMode: "environment", // Kamera Belakang
-            width: { ideal: 1280 },
-            height: { ideal: 720 }
+            facingMode: "environment",
+            width: { min: 640, ideal: 1280 },
+            height: { min: 480, ideal: 720 },
+            aspectRatio: { ideal: 1.777777778 }
+          },
+          // Membatasi scan hanya pada kotak garis merah di tengah (Super Smooth & Hemat CPU)
+          area: {
+            top: "25%",
+            right: "10%",
+            left: "10%",
+            bottom: "25%"
           }
         },
+        locator: {
+          patchSize: "medium",
+          halfSample: false // Full sampling agar sangat akurat & tajam
+        },
+        numOfWorkers: 4,
+        frequency: 15,
         decoder: {
           readers: [
             "code_128_reader",
@@ -193,10 +211,9 @@
           return;
         }
 
-        // PENYESUAIAN KHUSUS iOS (Safari Requirement)
         const videoElem = document.querySelector("#interactive video");
         if (videoElem) {
-          videoElem.setAttribute("playsinline", "true"); // Wajib untuk iOS Safari
+          videoElem.setAttribute("playsinline", "true");
           videoElem.setAttribute("muted", "true");
           videoElem.play().catch(e => console.log("Play video error:", e));
         }
@@ -207,22 +224,34 @@
       Quagga.onDetected(onBarcodeDetected);
     }
 
-    let lastScannedCode = "";
-    let lastScannedTime = 0;
-
+    let codeBuffer = [];
+    
     function onBarcodeDetected(result) {
-      const code = result.codeResult.code;
-      const now = Date.now();
+      const code = result.codeResult.code ? String(result.codeResult.code).trim().toUpperCase() : "";
 
-      if (code && (code !== lastScannedCode || now - lastScannedTime > 1500)) {
-        lastScannedCode = code;
-        lastScannedTime = now;
+      if (!code) return;
 
-        const inputId = document.getElementById("inputId");
-        inputId.value = code.trim();
+      // 1. CEK ATAU FILTER: Hanya proses jika ID ADA di database (masterMap)
+      if (masterMap.has(code)) {
         
-        cariJudulOtomatis();
-        toggleScanner();
+        // Verifikasi konsistensi baca 2 kali berturut-turut agar lebih smooth & presisi
+        codeBuffer.push(code);
+        if (codeBuffer.length > 2) codeBuffer.shift();
+
+        if (codeBuffer.length === 2 && codeBuffer[0] === codeBuffer[1]) {
+          codeBuffer = []; // Reset buffer
+          
+          const inputId = document.getElementById("inputId");
+          inputId.value = code;
+
+          cariJudulOtomatis();
+          toggleScanner(); // Tutup kamera otomatis setelah dapat yang ada di database
+        }
+      } else {
+        // Jika barcode yang di-scan TIDAK ADA di database, tampilkan status sebentar tetapi JANGAN matikan kamera
+        const hint = document.getElementById("scannerHint");
+        hint.style.color = "#dc3545";
+        hint.innerHTML = `✕ Barcode <b>${code}</b> tidak ada di database. Cari barcode buku lain...`;
       }
     }
 
