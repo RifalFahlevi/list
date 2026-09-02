@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sistem Sortir Buku</title>
+  
+  <!-- Library Scan Barcode Garis 1D (QuaggaJS) -->
+  <script src="https://cdn.jsdelivr.net/npm/@ericblade/quagga2/dist/quagga.min.js"></script>
+  
+  <style>
+    * { box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+    body { padding: 20px; background-color: #f4f7f6; max-width: 650px; margin: auto; }
+    h2 { color: #333; text-align: center; margin-bottom: 20px; }
+    .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 20px; }
+    .form-group { display: flex; flex-direction: column; gap: 12px; }
+    .input-row { display: flex; gap: 10px; }
+    input { padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+    input[readonly] { background-color: #e9ecef; color: #495057; font-weight: bold; }
+    .input-id { flex: 1; }
+    .input-judul { flex: 2; }
+    button { background-color: #28a745; color: white; border: none; padding: 11px 20px; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: bold; }
+    button:hover { background-color: #218838; }
+    button:disabled { background-color: #6c757d; cursor: not-allowed; }
+    .btn-sync { background-color: #17a2b8; margin-bottom: 10px; width: 100%; }
+    .btn-scan { background-color: #007bff; margin-bottom: 10px; width: 100%; display: flex; justify-content: center; align-items: center; gap: 8px; }
+    .btn-scan:hover { background-color: #0056b3; }
+    .status-msg { font-size: 13px; margin-top: -5px; }
+    .controls { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+    select { padding: 8px; border-radius: 4px; border: 1px solid #ccc; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+    th { background-color: #343a40; color: white; }
+    tr:nth-child(even) { background-color: #f9f9f9; }
+    
+    /* Container Area Kamera */
+    #reader-container { display: none; margin-bottom: 15px; border: 2px dashed #007bff; padding: 10px; border-radius: 8px; background: #fff; text-align: center; position: relative; }
+    #interactive.viewport { width: 100%; height: 250px; overflow: hidden; position: relative; }
+    #interactive.viewport canvas, #interactive.viewport video { width: 100%; height: 100%; object-fit: cover; }
+    
+    /* Garis Laser Merah */
+    .scan-guide {
+      position: absolute;
+      top: 50%;
+      left: 10%;
+      right: 10%;
+      height: 2px;
+      background: red;
+      box-shadow: 0 0 8px red;
+      z-index: 10;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Kamu bisa ubah Judul di bawah ini -->
+  <h2>SORTIR GMR YA GUYSSSSS</h2>
+
+  <div class="card">
+    <button type="button" class="btn-sync" onclick="fetchData(true)">🔄 Sync Master Data Terbaru</button>
+    <button type="button" class="btn-scan" onclick="toggleScanner()">📷 <span id="btnScanText">Buka Kamera Scan Barcode</span></button>
+    
+    <!-- Area Scanner Kamera -->
+    <div id="reader-container">
+      <div id="interactive" class="viewport">
+        <div class="scan-guide"></div>
+      </div>
+      <p style="font-size: 12px; color: #666; margin-top: 8px;">Posisikan garis barcode melintasi <b>garis merah</b></p>
+    </div>
+
+    <form id="bookForm" class="form-group">
+      <div class="input-row">
+        <input type="text" id="inputId" class="input-id" placeholder="Ketik/Scan ID Buku" required oninput="cariJudulOtomatis()" autofocus>
+        <input type="text" id="inputJudul" class="input-judul" placeholder="Judul Buku (Otomatis)" readonly>
+      </div>
+      <div id="statusMsg" class="status-msg"></div>
+      <button type="submit" id="btnSimpan" disabled>Simpan Ke List</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="controls">
+      <label><strong>Urutkan Berdasarkan:</strong></label>
+      <select id="sortBy" onchange="renderTable()">
+        <option value="id-desc">Terbaru Disimpan</option>
+        <option value="judul-asc">Judul (A - Z)</option>
+        <option value="judul-desc">Judul (Z - A)</option>
+        <option value="id-asc">ID (A - Z)</option>
+      </select>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 35%;">ID Buku</th>
+          <th>Judul Buku</th>
+        </tr>
+      </thead>
+      <tbody id="bookTableBody">
+        <tr><td colspan="2" style="text-align:center;">Memuat data...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwvND8_BwNxiygXN14reHZbHGk6oHctBVQsgeu5DkpH7-0jxyqLOY0G79NVhVcl_qh2_w/exec";
+
+    let masterMap = new Map();
+    let listBukuSimpan = [];
+    let isScanning = false;
+
+    document.addEventListener("DOMContentLoaded", () => {
+      loadLocalMaster();
+      fetchData(false);
+    });
+
+    function loadLocalMaster() {
+      const cachedMaster = localStorage.getItem("masterBukuCache");
+      if (cachedMaster) {
+        const arr = JSON.parse(cachedMaster);
+        masterMap = new Map(arr.map(item => [String(item.id).trim().toUpperCase(), item.judul]));
+      }
+    }
+
+    function fetchData(forceReload = false) {
+      const statusMsg = document.getElementById("statusMsg");
+      if (forceReload) statusMsg.textContent = "Sedang sinkronisasi data master...";
+
+      fetch(SCRIPT_URL)
+        .then(res => res.json())
+        .then(data => {
+          if (data.master && data.master.length > 0) {
+            localStorage.setItem("masterBukuCache", JSON.stringify(data.master));
+            masterMap = new Map(data.master.map(item => [String(item.id).trim().toUpperCase(), item.judul]));
+          }
+          
+          listBukuSimpan = data.simpan || [];
+          renderTable();
+
+          if (forceReload) {
+            statusMsg.style.color = "#28a745";
+            statusMsg.textContent = "✓ Master data berhasil diperbarui!";
+            setTimeout(() => statusMsg.textContent = "", 2000);
+          }
+        })
+        .catch(err => console.error("Error load data:", err));
+    }
+
+    // --- FITUR KAMERA KHUSUS DUKUNGAN iOS & ANDROID ---
+    function toggleScanner() {
+      const container = document.getElementById("reader-container");
+      const btnText = document.getElementById("btnScanText");
+
+      if (isScanning) {
+        Quagga.stop();
+        container.style.display = "none";
+        btnText.textContent = "Buka Kamera Scan Barcode";
+        isScanning = false;
+      } else {
+        container.style.display = "block";
+        btnText.textContent = "Tutup Kamera";
+        isScanning = true;
+        startQuaggaIOS();
+      }
+    }
+
+    function startQuaggaIOS() {
+      Quagga.init({
+        inputStream: {
+          name: "Live",
+          type: "LiveStream",
+          target: document.querySelector("#interactive"),
+          constraints: {
+            facingMode: "environment", // Kamera Belakang
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          }
+        },
+        decoder: {
+          readers: [
+            "code_128_reader",
+            "ean_reader",
+            "ean_8_reader",
+            "code_39_reader"
+          ]
+        },
+        locate: true
+      }, function(err) {
+        if (err) {
+          alert("Gagal membuka kamera: " + err);
+          toggleScanner();
+          return;
+        }
+
+        // PENYESUAIAN KHUSUS iOS (Safari Requirement)
+        const videoElem = document.querySelector("#interactive video");
+        if (videoElem) {
+          videoElem.setAttribute("playsinline", "true"); // Wajib untuk iOS Safari
+          videoElem.setAttribute("muted", "true");
+          videoElem.play().catch(e => console.log("Play video error:", e));
+        }
+
+        Quagga.start();
+      });
+
+      Quagga.onDetected(onBarcodeDetected);
+    }
+
+    let lastScannedCode = "";
+    let lastScannedTime = 0;
+
+    function onBarcodeDetected(result) {
+      const code = result.codeResult.code;
+      const now = Date.now();
+
+      if (code && (code !== lastScannedCode || now - lastScannedTime > 1500)) {
+        lastScannedCode = code;
+        lastScannedTime = now;
+
+        const inputId = document.getElementById("inputId");
+        inputId.value = code.trim();
+        
+        cariJudulOtomatis();
+        toggleScanner();
+      }
+    }
+
+    function cariJudulOtomatis() {
+      const inputIdVal = document.getElementById("inputId").value.trim().toUpperCase();
+      const inputJudul = document.getElementById("inputJudul");
+      const btnSimpan = document.getElementById("btnSimpan");
+      const statusMsg = document.getElementById("statusMsg");
+
+      if (inputIdVal === "") {
+        inputJudul.value = "";
+        statusMsg.textContent = "";
+        btnSimpan.disabled = true;
+        return;
+      }
+
+      if (masterMap.has(inputIdVal)) {
+        inputJudul.value = masterMap.get(inputIdVal);
+        statusMsg.style.color = "#28a745";
+        statusMsg.textContent = "✓ Buku ditemukan!";
+        btnSimpan.disabled = false;
+      } else {
+        inputJudul.value = "";
+        statusMsg.style.color = "#dc3545";
+        statusMsg.textContent = "✕ ID Buku tidak ditemukan";
+        btnSimpan.disabled = true;
+      }
+    }
+
+    document.getElementById("bookForm").addEventListener("submit", function(e) {
+      e.preventDefault();
+      
+      const idVal = document.getElementById("inputId").value.trim().toUpperCase();
+      const judulVal = document.getElementById("inputJudul").value;
+
+      const dataBaru = { id: idVal, judul: judulVal };
+
+      listBukuSimpan.unshift(dataBaru);
+      renderTable();
+
+      document.getElementById("inputId").value = "";
+      document.getElementById("inputJudul").value = "";
+      document.getElementById("statusMsg").textContent = "";
+      document.getElementById("btnSimpan").disabled = true;
+      document.getElementById("inputId").focus();
+
+      fetch(SCRIPT_URL, {
+        method: "POST",
+        body: JSON.stringify(dataBaru)
+      }).catch(err => console.error("Gagal simpan ke cloud:", err));
+    });
+
+    function renderTable() {
+      const sortBy = document.getElementById("sortBy").value;
+      const tbody = document.getElementById("bookTableBody");
+
+      let sortedData = [...listBukuSimpan];
+
+      sortedData.sort((a, b) => {
+        if (sortBy === "judul-asc") return String(a.judul).localeCompare(String(b.judul));
+        if (sortBy === "judul-desc") return String(b.judul).localeCompare(String(a.judul));
+        if (sortBy === "id-asc") return String(a.id).localeCompare(String(b.id));
+        if (sortBy === "id-desc") return 0;
+      });
+
+      tbody.innerHTML = "";
+      if (sortedData.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="2" style="text-align:center;">Belum ada buku yang disimpan.</td></tr>';
+        return;
+      }
+
+      sortedData.forEach(book => {
+        tbody.innerHTML += `
+          <tr>
+            <td><code>${book.id}</code></td>
+            <td><strong>${book.judul}</strong></td>
+          </tr>
+        `;
+      });
+    }
+  </script>
+</body>
+</html>
