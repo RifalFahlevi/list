@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sistem Sortir & Pendataan Buku</title>
+  <title>Sistem Sortir Buku</title>
   
-  <!-- Library Scan Universal Compatible Semua Device (HTML5-QRCode) -->
-  <script src="https://unpkg.com/html5-qrcode"></script>
+  <!-- Library Scan Barcode Garis 1D (QuaggaJS) -->
+  <script src="https://cdn.jsdelivr.net/npm/@ericblade/quagga2/dist/quagga.min.js"></script>
   
   <style>
     * { box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
@@ -25,7 +25,7 @@
     .btn-sync { background-color: #17a2b8; margin-bottom: 10px; width: 100%; }
     .btn-scan { background-color: #007bff; margin-bottom: 10px; width: 100%; display: flex; justify-content: center; align-items: center; gap: 8px; }
     .btn-scan:hover { background-color: #0056b3; }
-    .status-msg { font-size: 13px; margin-top: -5px; font-weight: 500; }
+    .status-msg { font-size: 13px; margin-top: -5px; }
     .controls { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
     select { padding: 8px; border-radius: 4px; border: 1px solid #ccc; }
     table { width: 100%; border-collapse: collapse; margin-top: 10px; }
@@ -34,14 +34,32 @@
     tr:nth-child(even) { background-color: #f9f9f9; }
     
     /* Container Area Kamera */
-    #reader-container { display: none; margin-bottom: 15px; border: 2px dashed #007bff; padding: 10px; border-radius: 8px; background: #fff; text-align: center; }
-    #reader { width: 100%; max-width: 450px; margin: auto; overflow: hidden; border-radius: 6px; }
-    .scan-box-info { font-size: 12px; color: #555; margin-top: 8px; line-height: 1.4; }
+    #reader-container { display: none; margin-bottom: 15px; border: 2px dashed #007bff; padding: 10px; border-radius: 8px; background: #fff; text-align: center; position: relative; }
+    #interactive.viewport { width: 100%; height: 260px; overflow: hidden; position: relative; border-radius: 6px; }
+    #interactive.viewport canvas, #interactive.viewport video { width: 100%; height: 100%; object-fit: cover; }
+    
+    /* Garis Laser Merah & Box Target */
+    .scan-guide {
+      position: absolute;
+      top: 50%;
+      left: 10%;
+      right: 10%;
+      height: 2px;
+      background: red;
+      box-shadow: 0 0 10px red;
+      z-index: 10;
+      pointer-events: none;
+    }
+    .scan-box-info {
+      font-size: 12px;
+      color: #666;
+      margin-top: 8px;
+    }
   </style>
 </head>
 <body>
 
-  <h2>SORTIR DULU GUYSSS</h2>
+  <h2>📚 Sistem Sortir & Pendataan Buku</h2>
 
   <div class="card">
     <button type="button" class="btn-sync" onclick="fetchData(true)">🔄 Sync Master Data Terbaru</button>
@@ -49,8 +67,10 @@
     
     <!-- Area Scanner Kamera -->
     <div id="reader-container">
-      <div id="reader"></div>
-      <p class="scan-box-info" id="scannerHint">Tahan kamera dengan tenang. Posisikan barcode tepat di dalam <b>kotak hijau/merah</b></p>
+      <div id="interactive" class="viewport">
+        <div class="scan-guide"></div>
+      </div>
+      <p class="scan-box-info" id="scannerHint">Posisikan garis barcode melintasi <b>garis merah</b></p>
     </div>
 
     <form id="bookForm" class="form-group">
@@ -88,11 +108,10 @@
   </div>
 
   <script>
-    const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwvND8_BwNxiygXN14reHZbHGk6oHctBVQsgeu5DkpH7-0jxyqLOY0G79NVhVcl_qh2_w/exec";
+    const SCRIPT_URL = "GANTI_DENGAN_URL_WEB_APP_KAMU";
 
     let masterMap = new Map();
     let listBukuSimpan = [];
-    let html5QrCode = null;
     let isScanning = false;
 
     document.addEventListener("DOMContentLoaded", () => {
@@ -104,14 +123,8 @@
       const cachedMaster = localStorage.getItem("masterBukuCache");
       if (cachedMaster) {
         const arr = JSON.parse(cachedMaster);
-        masterMap = new Map(arr.map(item => [cleanID(item.id), item.judul]));
+        masterMap = new Map(arr.map(item => [String(item.id).trim().toUpperCase(), item.judul]));
       }
-    }
-
-    // Fungsi normalisasi ID (menghapus spasi & titik agar pencocokan 100% akurat)
-    function cleanID(idStr) {
-      if (!idStr) return "";
-      return String(idStr).replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
     }
 
     function fetchData(forceReload = false) {
@@ -123,7 +136,7 @@
         .then(data => {
           if (data.master && data.master.length > 0) {
             localStorage.setItem("masterBukuCache", JSON.stringify(data.master));
-            masterMap = new Map(data.master.map(item => [cleanID(item.id), item.judul]));
+            masterMap = new Map(data.master.map(item => [String(item.id).trim().toUpperCase(), item.judul]));
           }
           
           listBukuSimpan = data.simpan || [];
@@ -138,131 +151,140 @@
         .catch(err => console.error("Error load data:", err));
     }
 
-    // --- SCANNER SMOOTH & COMPATIBLE UNTUK ALL DEVICES (iOS & ANDROID) ---
+    // --- FITUR KAMERA SUPER SMOOTH & KHUSUS MATCH DATABASE ---
     function toggleScanner() {
       const container = document.getElementById("reader-container");
       const btnText = document.getElementById("btnScanText");
 
       if (isScanning) {
-        if (html5QrCode) {
-          html5QrCode.stop().then(() => {
-            html5QrCode.clear();
-            container.style.display = "none";
-            btnText.textContent = "Buka Kamera Scan Barcode";
-            isScanning = false;
-          }).catch(err => console.error(err));
-        }
+        Quagga.stop();
+        container.style.display = "none";
+        btnText.textContent = "Buka Kamera Scan Barcode";
+        isScanning = false;
       } else {
         container.style.display = "block";
         btnText.textContent = "Tutup Kamera";
         isScanning = true;
-        startUniversalScanner();
+        startQuaggaSmooth();
       }
     }
 
-    function startUniversalScanner() {
-      html5QrCode = new Html5Qrcode("reader");
-
-      const formatsToSupport = [
-        Html5QrcodeSupportedFormats.EAN_13,
-        Html5QrcodeSupportedFormats.CODE_128,
-        Html5QrcodeSupportedFormats.EAN_8,
-        Html5QrcodeSupportedFormats.UPC_A,
-        Html5QrcodeSupportedFormats.UPC_E,
-        Html5QrcodeSupportedFormats.CODE_39
-      ];
-
-      // KONFIGURASI SCAN TELITI & SMOOTH
-      const config = {
-        fps: 6, // Diperlambat ke 6 FPS agar tidak menyambar barcode secara acak
-        qrbox: { width: 280, height: 160 }, // Persegi panjang fokus melintang
-        formatsToSupport: formatsToSupport,
-        experimentalFeatures: {
-          useBarCodeDetectorIfSupported: true
+    function startQuaggaSmooth() {
+      Quagga.init({
+        inputStream: {
+          name: "Live",
+          type: "LiveStream",
+          target: document.querySelector("#interactive"),
+          constraints: {
+            facingMode: "environment",
+            width: { min: 640, ideal: 1280 },
+            height: { min: 480, ideal: 720 },
+            aspectRatio: { ideal: 1.777777778 }
+          },
+          // Membatasi scan hanya pada kotak garis merah di tengah (Super Smooth & Hemat CPU)
+          area: {
+            top: "25%",
+            right: "10%",
+            left: "10%",
+            bottom: "25%"
+          }
+        },
+        locator: {
+          patchSize: "medium",
+          halfSample: false // Full sampling agar sangat akurat & tajam
+        },
+        numOfWorkers: 4,
+        frequency: 15,
+        decoder: {
+          readers: [
+            "code_128_reader",
+            "ean_reader",
+            "ean_8_reader",
+            "code_39_reader"
+          ]
+        },
+        locate: true
+      }, function(err) {
+        if (err) {
+          alert("Gagal membuka kamera: " + err);
+          toggleScanner();
+          return;
         }
-      };
 
-      html5QrCode.start(
-        { facingMode: "environment" },
-        config,
-        onScanSuccess
-      ).catch(err => {
-        alert("Gagal membuka kamera: " + err + ". Pastikan izin kamera aktif!");
-        toggleScanner();
+        const videoElem = document.querySelector("#interactive video");
+        if (videoElem) {
+          videoElem.setAttribute("playsinline", "true");
+          videoElem.setAttribute("muted", "true");
+          videoElem.play().catch(e => console.log("Play video error:", e));
+        }
+
+        Quagga.start();
       });
+
+      Quagga.onDetected(onBarcodeDetected);
     }
 
-    let detectHistory = [];
+    let codeBuffer = [];
     
-    function onScanSuccess(decodedText) {
-      const rawCode = decodedText.trim();
-      const cleanedCode = cleanID(rawCode);
+    function onBarcodeDetected(result) {
+      const code = result.codeResult.code ? String(result.codeResult.code).trim().toUpperCase() : "";
 
-      if (!cleanedCode) return;
+      if (!code) return;
 
-      const hint = document.getElementById("scannerHint");
-
-      // CEK KE DATABASE MASTER
-      if (masterMap.has(cleanedCode)) {
+      // 1. CEK ATAU FILTER: Hanya proses jika ID ADA di database (masterMap)
+      if (masterMap.has(code)) {
         
-        // BUFFER TELITI: Harus terdeteksi 2 kali berturut-turut dengan ID yang sama
-        detectHistory.push(cleanedCode);
-        if (detectHistory.length > 2) detectHistory.shift();
+        // Verifikasi konsistensi baca 2 kali berturut-turut agar lebih smooth & presisi
+        codeBuffer.push(code);
+        if (codeBuffer.length > 2) codeBuffer.shift();
 
-        if (detectHistory.length === 2 && detectHistory[0] === detectHistory[1]) {
-          detectHistory = [];
+        if (codeBuffer.length === 2 && codeBuffer[0] === codeBuffer[1]) {
+          codeBuffer = []; // Reset buffer
           
           const inputId = document.getElementById("inputId");
-          inputId.value = rawCode;
+          inputId.value = code;
 
           cariJudulOtomatis();
-          toggleScanner(); // Tutup kamera jika sudah teliti ketemu di database
-        } else {
-          hint.style.color = "#28a745";
-          hint.innerHTML = `⏳ <b>Buku terdeteksi!</b> Tahan HP sebentar dengan tenang...`;
+          toggleScanner(); // Tutup kamera otomatis setelah dapat yang ada di database
         }
-
       } else {
-        // Jika barcode di-scan TIDAK ADA di database, tampilkan status & tetap buka kamera
-        detectHistory = [];
+        // Jika barcode yang di-scan TIDAK ADA di database, tampilkan status sebentar tetapi JANGAN matikan kamera
+        const hint = document.getElementById("scannerHint");
         hint.style.color = "#dc3545";
-        hint.innerHTML = `✕ Barcode <b>${rawCode}</b> tidak ada di database. Arahkan ke barcode buku yang tepat!`;
+        hint.innerHTML = `✕ Barcode <b>${code}</b> tidak ada di database. Cari barcode buku lain...`;
       }
     }
 
-    // --- PENCARIAN INSTAN ---
     function cariJudulOtomatis() {
-      const rawInput = document.getElementById("inputId").value.trim();
-      const cleanedInput = cleanID(rawInput);
+      const inputIdVal = document.getElementById("inputId").value.trim().toUpperCase();
       const inputJudul = document.getElementById("inputJudul");
       const btnSimpan = document.getElementById("btnSimpan");
       const statusMsg = document.getElementById("statusMsg");
 
-      if (cleanedInput === "") {
+      if (inputIdVal === "") {
         inputJudul.value = "";
         statusMsg.textContent = "";
         btnSimpan.disabled = true;
         return;
       }
 
-      if (masterMap.has(cleanedInput)) {
-        inputJudul.value = masterMap.get(cleanedInput);
+      if (masterMap.has(inputIdVal)) {
+        inputJudul.value = masterMap.get(inputIdVal);
         statusMsg.style.color = "#28a745";
         statusMsg.textContent = "✓ Buku ditemukan!";
         btnSimpan.disabled = false;
       } else {
         inputJudul.value = "";
         statusMsg.style.color = "#dc3545";
-        statusMsg.textContent = "✕ ID Buku tidak ditemukan di database";
+        statusMsg.textContent = "✕ ID Buku tidak ditemukan";
         btnSimpan.disabled = true;
       }
     }
 
-    // --- SIMPAN INSTAN ---
     document.getElementById("bookForm").addEventListener("submit", function(e) {
       e.preventDefault();
       
-      const idVal = document.getElementById("inputId").value.trim();
+      const idVal = document.getElementById("inputId").value.trim().toUpperCase();
       const judulVal = document.getElementById("inputJudul").value;
 
       const dataBaru = { id: idVal, judul: judulVal };
@@ -282,7 +304,6 @@
       }).catch(err => console.error("Gagal simpan ke cloud:", err));
     });
 
-    // --- RENDER TABEL ---
     function renderTable() {
       const sortBy = document.getElementById("sortBy").value;
       const tbody = document.getElementById("bookTableBody");
